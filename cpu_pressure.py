@@ -7,11 +7,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
 sentinel_time = parser.parse("2024-11-07T00:00:00+00:00")
-bad_nodes = ["aks-user1-16576121-vmss00001g", "aks-user1-16576121-vmss00001i", "aks-user2-16576121-vmss00001a", "aks-user3-16576121-vmss00001b", "aks-user3-16576121-vmss00001f"]
+bad_nodes = ["aks-user2-16576121-vmss00000u", "aks-user2-16576121-vmss00001h", "aks-user2-16576121-vmss00001k"]
 plasma = matplotlib.colormaps.get_cmap('plasma')
 
 all_nodes = []
-for root, dirs, files in os.walk("/tmp/data"):
+for root, dirs, files in os.walk("_output/data"):
     for filename in files:
         node = os.path.splitext(filename)[0]
         all_nodes.append(node)
@@ -23,164 +23,204 @@ for idx, node in enumerate(good_nodes):
 for idx, node in enumerate(bad_nodes):
     node_colors[node] = plasma(0.66 + 0.33 * (float(idx)/len(bad_nodes)))
 
-fig, axs = plt.subplots(6, 1, sharex=True, figsize=(150, 36))
+rows = 9
+fig, axs = plt.subplots(rows, 1, sharex=True, figsize=(150, rows * 9))
 kubelet = axs[0]
 containerd = axs[1]
 kubepods = axs[2]
 system = axs[3]
-total = axs[4]
-weight = axs[5]
+cpu_user = axs[4]
+cpu_nice = axs[5]
+cpu_system = axs[6]
+mem_used = axs[7]
+mem_swap = axs[8]
 nodes = []
-for root, dirs, files in os.walk("/tmp/data"):
+for root, dirs, files in os.walk("_output/data"):
     for filename in files:
         node = os.path.splitext(filename)[0]
         with open(os.path.join(root, filename), "r") as f:
             data = json.load(f)
-            times = []
+            cpu_pressure_full = {}
+
             for key in data:
-                if key == "name":
-                    continue
-                times.append(parser.parse(key))
-            times.sort()
-            raw = {
-                'date': [sentinel_time + (time - times[0]) for time in times],
+                time = parser.parse(key)
+
+                if "cgroups" in data[key]:
+                    for cgroup in data[key]["cgroups"]:
+                        if "cpu.pressure" in data[key]["cgroups"][cgroup]:
+                            pressure = data[key]["cgroups"][cgroup]["cpu.pressure"]
+                            for line in pressure:
+                                if line.startswith("full"):
+                                    infos = line.split(" ")
+                                    if len(infos) == 5:
+                                        parts = infos[1].split("=")
+                                        if len(parts) == 2 and parts[0] == "avg10":
+                                            if cgroup not in cpu_pressure_full:
+                                                cpu_pressure_full[cgroup] = {"date": [], "value": []}
+                                            cpu_pressure_full[cgroup]["date"].append(time)
+                                            cpu_pressure_full[cgroup]["value"].append(float(parts[1]))
+                                        else:
+                                            print("found part with incorrect label: " + infos[1])
+                                    else:
+                                        print("found incorrect number of infos: " + line)
+
+                if "cgroups" in data[key] and "system.slice" in data[key]["cgroups"] and "children" in data[key]["cgroups"]["system.slice"]:
+                    for cgroup in data[key]["cgroups"]["system.slice"]["children"]:
+                        if "cpu.pressure" in data[key]["cgroups"]["system.slice"]["children"][cgroup]:
+                            pressure = data[key]["cgroups"]["system.slice"]["children"][cgroup]["cpu.pressure"]
+                            for line in pressure:
+                                # https://docs.kernel.org/accounting/psi.html#pressure-interface
+                                # full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+                                if line.startswith("full"):
+                                    infos = line.split(" ")
+                                    if len(infos) == 5:
+                                        parts = infos[1].split("=")
+                                        if len(parts) == 2 and parts[0] == "avg10":
+                                            if cgroup not in cpu_pressure_full:
+                                                cpu_pressure_full[cgroup] = {"date": [], "value": []}
+                                            cpu_pressure_full[cgroup]["date"].append(time)
+                                            cpu_pressure_full[cgroup]["value"].append(float(parts[1]))
+                                        else:
+                                            print("found part with incorrect label: " + infos[1])
+                                    else:
+                                        print("found incorrect number of infos: " + line)
+
+            units = {
+                "containerd.service": containerd,
+                "kubelet.service": kubelet,
+                "system.slice": system,
+                "kubepods.slice": kubepods,
             }
-            units = ["containerd.service", "kubelet.service"]
             for unit in units:
-                values = []
-                for time in times:
-                    value = None
-                    if time.isoformat() not in data:
-                        values.append(value)
-                        continue
-                    if "cgroups" not in data[time.isoformat()]:
-                        values.append(value)
-                        continue
-                    if "system.slice" not in data[time.isoformat()]["cgroups"]:
-                        values.append(value)
-                        continue
-                    if "children" not in data[time.isoformat()]["cgroups"]["system.slice"]:
-                        values.append(value)
-                        continue
-                    if unit not in data[time.isoformat()]["cgroups"]["system.slice"]["children"]:
-                        values.append(value)
-                        continue
-                    if "cpu.pressure" not in data[time.isoformat()]["cgroups"]["system.slice"]["children"][unit]:
-                        values.append(value)
-                        continue
-                    pressure = data[time.isoformat()]["cgroups"]["system.slice"]["children"][unit]["cpu.pressure"]
-                    for line in pressure:
-                        if line.startswith("full"):
-                            infos = line.split(" ")
-                            if len(infos) == 5:
-                                parts = infos[1].split("=")
-                                if len(parts) == 2 and parts[0] == "avg10":
-                                    value = float(parts[1])
-                                else:
-                                    print("found part with incorrect label: " + infos[1])
-                            else:
-                                print("found incorrect number of infos: " + line)
-                    values.append(value)
-                raw[unit] = values
-
-            weights = []
-            for time in times:
-                value = None
-                if time.isoformat() not in data:
-                    weights.append(value)
+                if unit not in cpu_pressure_full:
                     continue
-                weights.append(int(data[time.isoformat()]["kubepods.slice_weight"]))
-            raw["weight"] = weights
 
-            df = pd.DataFrame(raw)
+                df = pd.DataFrame(cpu_pressure_full[unit])
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+
+                units[unit].plot(df.index, df["value"], color=node_colors[node],zorder=100 if node in bad_nodes else 0)
+
+            cpu_usage = {}
+            for key in data:
+                time = parser.parse(key)
+
+                # https://www.kernel.org/doc/html/latest/filesystems/proc.html#miscellaneous-kernel-statistics-in-proc-stat
+                # cpu  2083288 187  326416 16266106 17501  36640 35408   0     0     0
+                #      user    nice system idle     iowait irq   softirq steal guest guest_nice
+                # Units are USER_HZ, which is 1/100s
+                if "cpu" in data[key]:
+                    cpu = data[key]["cpu"]
+                    for line in cpu:
+                        parts = line.split()
+                        if len(parts) < 4:
+                            continue
+                        if parts[0] == "cpu":
+                            cpu_labels = {
+                                "user": 1,
+                                "nice": 2,
+                                "system": 3,
+                            }
+                            for cpu_label in cpu_labels:
+                                if cpu_label not in cpu_usage:
+                                    cpu_usage[cpu_label] = {"date": [], "value": []}
+                                cpu_usage[cpu_label]["date"].append(time)
+                                cpu_usage[cpu_label]["value"].append(float(parts[cpu_labels[cpu_label]]))
+
+            memory_labels = {
+                "total": "MemTotal:",
+                "available": "MemAvailable:",
+                "swap_free": "SwapFree:",
+                "swap_total": "SwapTotal:",
+            }
+            memory_usage = {"date": []}
+            for key in memory_labels:
+                memory_usage[key] = []
+
+            for key in data:
+                time = parser.parse(key)
+
+                # https://www.kernel.org/doc/html/latest/filesystems/proc.html#meminfo
+                # MemTotal:       32858820 kB
+                # MemAvailable:   27214312 kB
+                if "mem" in data[key]:
+                    mem = data[key]["mem"]
+                    found = False
+                    for line in mem:
+                        parts = line.split()
+                        if len(parts) < 3:
+                            continue
+
+                        for memory_label in memory_labels:
+                            if parts[0] == memory_labels[memory_label]:
+                                if parts[2] != "kB":
+                                    print(f"found unknown memory unit {parts[2]}")
+                                    continue
+                                found = True
+                                memory_usage[memory_label].append(int(parts[1]))
+
+                    if found:
+                        memory_usage["date"].append(time)
+
+            modes = {
+                "user": cpu_user,
+                "nice": cpu_nice,
+                "system": cpu_system,
+            }
+            for mode in modes:
+                if mode not in cpu_usage:
+                    continue
+
+                df = pd.DataFrame(cpu_usage[mode])
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+                df['rate'] = (df['value'].diff() / df.index.to_series().diff().dt.total_seconds()) / (16 * 100 / 100) # divide by 100 for USER_HZ->seconds, by 16 for % CPU, multiply by 100 for 0-100% range
+
+                modes[mode].plot(df.index, df["rate"], color=node_colors[node],zorder=100 if node in bad_nodes else 0)
+
+            df = pd.DataFrame(memory_usage)
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
+            df['mem_used'] = 100 * (1 - df['available'] / df['total'])
+            df['swap_used'] = 100 * ((df['swap_total'] - df['swap_free']) / df['swap_total'])
 
-            kubelet.plot(df.index, df["kubelet.service"], color=node_colors[node],zorder=100 if node in bad_nodes else 0)
-            containerd.plot(df.index, df["containerd.service"], color=node_colors[node],zorder=100 if node in bad_nodes else 0)
-            weight.plot(df.index, df["weight"], color=node_colors[node],zorder=100 if node in bad_nodes else 0)
+            mem_used.plot(df.index, df["mem_used"], color=node_colors[node],zorder=100 if node in bad_nodes else 0)
+            mem_swap.plot(df.index, df["swap_used"], color=node_colors[node],zorder=100 if node in bad_nodes else 0)
 
-            sliceraw = {
-                'date': [sentinel_time + (time - times[0]) for time in times],
-            }
-            slices = ["kubepods.slice", "system.slice"]
-            for slice in slices:
-                values = []
-                for time in times:
-                    value = None
-                    if time.isoformat() not in data:
-                        values.append(value)
-                        continue
-                    if "cgroups" not in data[time.isoformat()]:
-                        values.append(value)
-                        continue
-                    if slice not in data[time.isoformat()]["cgroups"]:
-                        values.append(value)
-                        continue
-                    if "cpu.stat" not in data[time.isoformat()]["cgroups"][slice]:
-                        values.append(value)
-                        continue
-                    pressure = data[time.isoformat()]["cgroups"][slice]["cpu.stat"]
-                    for line in pressure:
-                        if line.startswith("usage_usec"):
-                            infos = line.split(" ")
-                            if len(infos) == 2:
-                                value = int(infos[1])
-                            else:
-                                print("found incorrect number of cpu.stat infos: " + line)
-                    values.append(value)
-                sliceraw[slice] = values
-
-            totals = []
-            for time in times:
-                value = None
-                if time.isoformat() not in data:
-                    totals.append(value)
-                    continue
-                if "cgroups" not in data[time.isoformat()]:
-                    totals.append(value)
-                    continue
-
-                for slice in data[time.isoformat()]["cgroups"]:
-                    if "cpu.stat" not in data[time.isoformat()]["cgroups"][slice]:
-                        continue
-                    pressure = data[time.isoformat()]["cgroups"][slice]["cpu.stat"]
-                    for line in pressure:
-                        if line.startswith("usage_usec"):
-                            infos = line.split(" ")
-                            if len(infos) == 2:
-                                if value is None:
-                                    value = int(infos[1])
-                                else:
-                                    value += int(infos[1])
-                            else:
-                                print("found incorrect number of cpu.stat infos: " + line)
-                totals.append(value)
-            sliceraw['total'] = totals
-
-            df2 = pd.DataFrame(sliceraw)
-            df2['date'] = pd.to_datetime(df2['date'])
-            df2.set_index('date', inplace=True)
-            df2['kubepods.rate'] = df2['kubepods.slice'].diff() / df2.index.to_series().diff().dt.total_seconds()
-            df2['system.rate'] = df2['system.slice'].diff() / df2.index.to_series().diff().dt.total_seconds()
-            df2['total.rate'] = df2['total'].diff() / df2.index.to_series().diff().dt.total_seconds()
-
-            kubepods.plot(df2.index, df2["kubepods.rate"] / 1e6, color=node_colors[node],zorder=100 if node in bad_nodes else 0)
-            system.plot(df2.index, df2["system.rate"] / 1e6, color=node_colors[node],zorder=100 if node in bad_nodes else 0)
-            total.plot(df2.index, df2["total.rate"] / 1e6, color=node_colors[node],zorder=100 if node in bad_nodes else 0)
 
 plt.legend(nodes)
-kubelet.title.set_text('kubelet')
-kubelet.set(ylabel='Full CPU Pressure (%)')
-containerd.title.set_text('containerd')
-containerd.set(ylabel='Full CPU Pressure (%)')
-kubepods.title.set_text('kubepods.slice')
-kubepods.set(ylabel='CPU Usage (seconds)')
-system.title.set_text('system.slice')
-system.set(ylabel='CPU Usage (seconds)')
-total.title.set_text('total')
-total.set(ylabel='CPU Usage (seconds)')
-weight.title.set_text('kubepods.slice cpu.weight')
-weight.set(ylabel='CPU Weight')
+pressures = {
+    'kubelet': kubelet,
+    'containerd': containerd,
+    'kubepods.slice': kubepods,
+    'system.slice': system,
+}
+for title in pressures:
+    pressures[title].title.set_text(title)
+    pressures[title].set(ylabel='Full CPU Pressure (%)')
+    pressures[title].set_ylim([0,60])
+    pressures[title].set_xlim([parser.parse("2024-11-08T14:30:00+00:00"),parser.parse("2024-11-08T16:00:00+00:00")])
+
+usages = {
+    'user': cpu_user,
+    'nice': cpu_nice,
+    'system': cpu_system,
+}
+for title in usages:
+    usages[title].title.set_text(title)
+    usages[title].set(ylabel='CPU Usage (%)')
+    usages[title].set_ylim([0,100])
+    usages[title].set_xlim([parser.parse("2024-11-08T14:30:00+00:00"),parser.parse("2024-11-08T16:00:00+00:00")])
+
+memories = {
+    'used': mem_used,
+    'swap': mem_swap
+}
+for title in memories:
+    memories[title].title.set_text(title)
+    memories[title].set(ylabel='Memory Fraction (%)')
+    memories[title].set_ylim([0,100])
+    memories[title].set_xlim([parser.parse("2024-11-08T14:30:00+00:00"),parser.parse("2024-11-08T16:00:00+00:00")])
+
 plt.xlabel('Date')
 plt.show()

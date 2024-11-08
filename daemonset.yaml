@@ -55,7 +55,13 @@ spec:
                cat "$file"
                echo "---"
              done
-             for file in /proc/stat /proc/meminfo; do
+             for file in /proc/stat /proc/meminfo /proc/diskstats; do
+               date
+               echo "$file"
+               cat "$file"
+               echo "---"
+             done
+             for file in $( find -L /sys/block -maxdepth 2 -type f -name stat ); do
                date
                echo "$file"
                cat "$file"
