@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    component: kubelet-parameters
+  name: kubelet-parameters
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      component: kubelet-parameters
+      tier: node
+  template:
+    metadata:
+      labels:
+        component: kubelet-parameters
+        tier: node
+    spec:
+      #Enable node selector in case you need to run on specific node pool      
+      #nodeSelector:
+      #  agentpool: default      
+      containers:
+      - command:
+        - nsenter
+        - --target
+        - "1"
+        - --mount
+        - --uts
+        - --ipc
+        - --net
+        - --pid
+        - --
+        - sh
+        - -c
+        - |
+          if cat /etc/default/kubelet | grep -q '\-\-system-reserved=cpu=3000m,memory=7550Mi,pid=1000';then
+             echo "kube-reserved parameter already updated to system-reserved in kubelet configuration"
+          else
+             sed -i -E 's/--kube-reserved=[^ ]+/--system-reserved=cpu=3000m,memory=7550Mi,pid=1000/g' /etc/default/kubelet
+             systemctl daemon-reload
+             systemctl restart kubelet
+             echo "kube-reserved parameter has been updated to system-reserved in kubelet configuration"
+          fi      
+          echo "== START =="
+          while true; do  
+             for file in $( find /sys/fs/cgroup -mindepth 2 -maxdepth 2 -type f -name cpu.stat -o -name cpu.pressure -o -name memory.stat -o -name memory.pressure ); do
+               date
+               echo "$file"
+               cat "$file"
+               echo "---"
+             done
+             for file in $( find /sys/fs/cgroup/system.slice -mindepth 2 -maxdepth 2 -type f -name cpu.stat -o -name cpu.pressure -o -name memory.stat -o -name memory.pressure ); do
+               date
+               echo "$file"
+               cat "$file"
+               echo "---"
+             done
+             for file in /proc/stat /proc/meminfo; do
+               date
+               echo "$file"
+               cat "$file"
+               echo "---"
+             done
+             echo "==="
+             sleep 1
+          done
+        image: alpine
+        imagePullPolicy: IfNotPresent
+        name: kubelet-parameters
+        resources:
+          requests:
+            cpu: 10m
+        securityContext:
+          privileged: true
+      dnsPolicy: ClusterFirst
+      hostPID: true
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      restartPolicy: Always
+  updateStrategy:
+    type: RollingUpdate
