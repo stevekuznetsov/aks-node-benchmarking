@@ -2,12 +2,14 @@
 
 import os
 import json
+from gzip import WRITE
+
 from dateutil import parser
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
 sentinel_time = parser.parse("2024-11-07T00:00:00+00:00")
-bad_nodes = ["aks-user2-16576121-vmss00000u", "aks-user2-16576121-vmss00001h", "aks-user2-16576121-vmss00001k"]
+bad_nodes = ["aks-user2-33946009-vmss000000", "aks-user1-17939295-vmss000005", "aks-user3-35933842-vmss000005", "aks-user3-35933842-vmss000002", "aks-user3-35933842-vmss000003"]
 plasma = matplotlib.colormaps.get_cmap('plasma')
 
 all_nodes = []
@@ -23,7 +25,7 @@ for idx, node in enumerate(good_nodes):
 for idx, node in enumerate(bad_nodes):
     node_colors[node] = plasma(0.66 + 0.33 * (float(idx)/len(bad_nodes)))
 
-rows = 9
+rows = 10
 fig, axs = plt.subplots(rows, 1, sharex=True, figsize=(150, rows * 9))
 kubelet = axs[0]
 containerd = axs[1]
@@ -34,6 +36,7 @@ cpu_nice = axs[5]
 cpu_system = axs[6]
 mem_used = axs[7]
 mem_swap = axs[8]
+disk_ios = axs[9]
 nodes = []
 for root, dirs, files in os.walk("_output/data"):
     for filename in files:
@@ -99,6 +102,8 @@ for root, dirs, files in os.walk("_output/data"):
                 df['date'] = pd.to_datetime(df['date'])
                 df.set_index('date', inplace=True)
 
+                # print(f"{node}: {unit}: {df["value"].max()}")
+
                 units[unit].plot(df.index, df["value"], color=node_colors[node],zorder=100 if node in bad_nodes else 0)
 
             cpu_usage = {}
@@ -162,6 +167,35 @@ for root, dirs, files in os.walk("_output/data"):
                     if found:
                         memory_usage["date"].append(time)
 
+            disk_usage = {}
+            for key in data:
+                time = parser.parse(key)
+                # https://www.kernel.org/doc/Documentation/block/stat.txt
+
+                if "blocks" in data[key]:
+                    for block in data[key]["blocks"]:
+                        if block not in disk_usage:
+                            disk_usage[block] = {"date": [], "ios": [], "inflight": []}
+                        for line in data[key]["blocks"][block]:
+                            parts = line.split()
+                            if len(parts) < 17:
+                                continue
+                            read_ios = int(parts[0])
+                            write_ios = int(parts[4])
+                            discard_ios = int(parts[11])
+                            inflight_ios = int(parts[8])
+                            disk_usage[block]["date"].append(time)
+                            disk_usage[block]["ios"].append(read_ios + write_ios + discard_ios)
+                            disk_usage[block]["inflight"].append(inflight_ios)
+
+            for block in disk_usage:
+                df = pd.DataFrame(disk_usage[block])
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+                df['rate'] = (df['ios'].diff() / df.index.to_series().diff().dt.total_seconds())
+
+                disk_ios.plot(df.index, df["rate"], color=node_colors[node],zorder=100 if node in bad_nodes else 0)
+
             modes = {
                 "user": cpu_user,
                 "nice": cpu_nice,
@@ -188,6 +222,9 @@ for root, dirs, files in os.walk("_output/data"):
             mem_swap.plot(df.index, df["swap_used"], color=node_colors[node],zorder=100 if node in bad_nodes else 0)
 
 
+start = parser.parse("2024-11-08T23:00:00+00:00")
+end = parser.parse("2024-11-09T00:30:00+00:00")
+
 plt.legend(nodes)
 pressures = {
     'kubelet': kubelet,
@@ -199,7 +236,7 @@ for title in pressures:
     pressures[title].title.set_text(title)
     pressures[title].set(ylabel='Full CPU Pressure (%)')
     pressures[title].set_ylim([0,60])
-    pressures[title].set_xlim([parser.parse("2024-11-08T14:30:00+00:00"),parser.parse("2024-11-08T16:00:00+00:00")])
+    pressures[title].set_xlim([start,end])
 
 usages = {
     'user': cpu_user,
@@ -210,7 +247,7 @@ for title in usages:
     usages[title].title.set_text(title)
     usages[title].set(ylabel='CPU Usage (%)')
     usages[title].set_ylim([0,100])
-    usages[title].set_xlim([parser.parse("2024-11-08T14:30:00+00:00"),parser.parse("2024-11-08T16:00:00+00:00")])
+    usages[title].set_xlim([start,end])
 
 memories = {
     'used': mem_used,
@@ -220,7 +257,11 @@ for title in memories:
     memories[title].title.set_text(title)
     memories[title].set(ylabel='Memory Fraction (%)')
     memories[title].set_ylim([0,100])
-    memories[title].set_xlim([parser.parse("2024-11-08T14:30:00+00:00"),parser.parse("2024-11-08T16:00:00+00:00")])
+    memories[title].set_xlim([start,end])
+
+disk_ios.title.set_text('Disk I/Os')
+disk_ios.set(ylabel='IOPS')
+disk_ios.set_xlim([start,end])
 
 plt.xlabel('Date')
 plt.show()

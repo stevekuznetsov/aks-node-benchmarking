@@ -2,8 +2,8 @@ _output/:
 	mkdir -p _output/
 
 _output/kubeconfig: _output/
-	az login --tenant 93b21e64-4824-439a-b893-46c9b2a51082 --subscription 403d9de9-132b-4974-94a5-5b78bdfa191e
-	az aks get-credentials --resource-group perf-scale-rg --name aks-cluster-001 --file _output/kubeconfig
+#	az login --tenant 93b21e64-4824-439a-b893-46c9b2a51082 --subscription 403d9de9-132b-4974-94a5-5b78bdfa191e
+#	az aks get-credentials --resource-group perf-scale-rg --name aks-cluster-001 --file _output/kubeconfig
 
 .PHONY: daemonset
 daemonset: _output/kubeconfig
