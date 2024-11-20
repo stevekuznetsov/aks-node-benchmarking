@@ -40,7 +40,15 @@ spec:
              systemctl daemon-reload
              systemctl restart kubelet
              echo "kube-reserved parameter has been updated to system-reserved in kubelet configuration"
-          fi      
+          fi
+          if grep -q '\-\-collector.netclass.netlink' /usr/local/bin/node-exporter-startup.sh;then
+             echo "kube-reserved parameter already updated to system-reserved in kubelet configuration"
+          else
+             sed -i 's/--no-collector.arp.netlink/--no-collector.arp.netlink --collector.netclass.netlink/g' /usr/local/bin/node-exporter-startup.sh
+             systemctl daemon-reload
+             systemctl restart node-exporter
+             echo "collector.netclass.netlink parameter has been updated in node-exporter configuration"
+          fi
           echo "== START =="
           while true; do  
              for file in $( find /sys/fs/cgroup -mindepth 2 -maxdepth 2 -type f -name cpu.stat -o -name cpu.pressure -o -name memory.stat -o -name memory.pressure ); do
